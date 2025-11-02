@@ -2,7 +2,7 @@ require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
-const { createProxyMiddleware } = require('http-proxy-middleware');
+const axios = require('axios');
 const rateLimit = require('express-rate-limit');
 
 function createApp(config = {}) {
@@ -33,7 +33,6 @@ function createApp(config = {}) {
     // Authentication middleware
     const authenticate = (req, res, next) => {
         const apiKey = req.headers['x-api-key'];
-
         if (!apiKey) {
             return res.status(401).json({ error: 'API key is required' });
         }
@@ -49,37 +48,56 @@ function createApp(config = {}) {
     app.use(authenticate);
     app.use(limiter);
 
-    // Configure a proxy
-    app.use('/', createProxyMiddleware({
-        router: (req) => {
-            return req.path.substring(1);
-        },
-        pathRewrite: (path, req) => {
-            try {
-                return new URL(req.path.substring(1)).pathname;
-            } catch (e) {
-                return '/';
-            }
-        },
-        changeOrigin: true,
-        logger: console,
-        onError: (err, req, res) => {
-            console.error('Proxy error:', err);
+    // Manual proxy handler
+    app.use('/', async (req, res) => {
+        try {
+            // Extract the target URL from the request path
+            const targetUrl = req.path.substring(1) + (req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '');
+            console.log('Proxying to:', targetUrl);
+
+            // Make the request to the target URL
+            const response = await axios({
+                method: req.method,
+                url: targetUrl,
+                headers: {
+                    'User-Agent': req.headers['user-agent'] || 'Mozilla/5.0',
+                    'Accept': req.headers['accept'] || '*/*',
+                    'Accept-Encoding': req.headers['accept-encoding'] || 'gzip, deflate, br'
+                },
+                data: req.body,
+                validateStatus: () => true, // Don't throw on any status
+                responseType: 'arraybuffer' // Get raw response
+            });
+
+            console.log('Response status:', response.status);
+
+            // Copy response headers (excluding some problematic ones)
+            Object.keys(response.headers).forEach(key => {
+                if (!['connection', 'transfer-encoding', 'content-encoding'].includes(key.toLowerCase())) {
+                    res.setHeader(key, response.headers[key]);
+                }
+            });
+
+            // Send the response
+            res.status(response.status).send(response.data);
+        } catch (error) {
+            console.error('Proxy error:', error.message);
             if (!res.headersSent) {
-                res.status(500).json({ error: 'Proxy error occurred' });
+                res.status(500).json({ error: 'Proxy error occurred', message: error.message });
             }
         }
-    }));
+    });
 
     return app;
 }
 
-// Only start server if running directly (not imported for testing)
+// Only start the server if running directly (not imported for testing)
 if (require.main === module) {
     const app = createApp();
     const PORT = process.env.PORT || 8088;
-    app.listen(PORT, () => {
-        console.log(`Secure CORS proxy server running on port ${PORT}`);
+    const server = app.listen(PORT, () => {
+        const address = server.address();
+        console.log(`Secure CORS proxy server running on ${address.address}:${address.port}`);
         console.log(`Loaded ${process.env.API_KEYS ? process.env.API_KEYS.split(',').length : 0} API keys`);
     });
 }

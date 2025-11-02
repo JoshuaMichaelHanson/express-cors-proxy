@@ -154,6 +154,34 @@ describe('CORS Proxy Server', () => {
         });
     });
 
+    describe('Query Parameters', () => {
+        test('should preserve query parameters in proxied request', async () => {
+            const response = await request(app)
+                .get('/https://httpbin.org/get?foo=bar&baz=qux')
+                .set('x-api-key', testApiKey);
+
+            // httpbin.org/get returns the query params in the response
+            expect(response.status).toBe(200);
+            const bodyText = Buffer.isBuffer(response.body) ? response.body.toString() : JSON.stringify(response.body);
+            const body = JSON.parse(bodyText);
+            expect(body.args.foo).toBe('bar');
+            expect(body.args.baz).toBe('qux');
+        });
+
+        test('should handle complex query parameters with API keys', async () => {
+            const response = await request(app)
+                .get('/https://httpbin.org/get?stateCode=MN&limit=5&api_key=fake-api-key-12345')
+                .set('x-api-key', testApiKey);
+
+            expect(response.status).toBe(200);
+            const bodyText = Buffer.isBuffer(response.body) ? response.body.toString() : JSON.stringify(response.body);
+            const body = JSON.parse(bodyText);
+            expect(body.args.stateCode).toBe('MN');
+            expect(body.args.limit).toBe('5');
+            expect(body.args.api_key).toBe('fake-api-key-12345');
+        });
+    });
+
     describe('Error Handling', () => {
         test('should handle malformed URLs gracefully', async () => {
             const response = await request(app)
